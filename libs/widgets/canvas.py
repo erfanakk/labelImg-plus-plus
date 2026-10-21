@@ -1076,7 +1076,9 @@ class Canvas(QWidget):
         p.begin(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.HighQualityAntialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        # Smooth reduction for fit-to-window, but keep native pixels crisp at
+        # 100% and above instead of blurring fine pitch-line details.
+        p.setRenderHint(QPainter.SmoothPixmapTransform, self.scale < 1.0)
 
         p.scale(self.scale, self.scale)
         p.translate(self.offset_to_center())

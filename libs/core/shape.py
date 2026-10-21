@@ -47,6 +47,8 @@ class Shape(object):
     h_vertex_fill_color = DEFAULT_HVERTEX_FILL_COLOR
     point_type = P_ROUND
     point_size = 16
+    line_width = 2
+    show_center_circle = False
     scale = 1.0
     label_font_size = 8
 
@@ -189,6 +191,9 @@ class Shape(object):
             color = self.select_fill_color if self.selected else self.fill_color
             painter.fillPath(line_path, color)
 
+        if self.show_center_circle:
+            self._draw_center_circle(painter)
+
     def _build_paths(self):
         """Build the line and vertex paths for drawing."""
         line_path = QPainterPath()
@@ -208,30 +213,69 @@ class Shape(object):
         """Draw the shape outline and vertices."""
         color = self.select_line_color if self.selected else self.line_color
         pen = QPen(color)
-        pen.setWidth(max(1, int(round(2.0 / self.scale))))
+        pen.setWidth(max(1, int(round(self.line_width / self.scale))))
         painter.setPen(pen)
 
         painter.drawPath(line_path)
         painter.drawPath(vertex_path)
         painter.fillPath(vertex_path, self.vertex_fill_color)
 
+    def _draw_center_circle(self, painter):
+        """Draw a fixed-screen-size marker at a completed rectangle's center."""
+        if self.shape_type != ShapeType.RECTANGLE or not self.is_closed():
+            return
+
+        min_x = min(point.x() for point in self.points)
+        max_x = max(point.x() for point in self.points)
+        min_y = min(point.y() for point in self.points)
+        max_y = max(point.y() for point in self.points)
+        center = QPointF((min_x + max_x) / 2, (min_y + max_y) / 2)
+        scale = max(self.scale, 0.01)
+        radius = 6.0 / scale
+        outline_width = max(1, int(round(2.0 / scale)))
+        color = QColor(
+            self.select_line_color if self.selected else self.line_color)
+        color.setAlpha(255)
+
+        painter.save()
+        painter.setPen(QPen(QColor(255, 255, 255), outline_width))
+        painter.setBrush(color)
+        painter.drawEllipse(center, radius, radius)
+        painter.restore()
+
     def _draw_label(self, painter):
-        """Draw the label text at the top-left corner of the shape."""
+        """Draw a high-contrast label immediately above the shape."""
         min_x, min_y = self._get_top_left_corner()
         if min_x == sys.maxsize or min_y == sys.maxsize:
             return
 
-        min_y_label = int(1.25 * self.label_font_size)
-        if min_y < min_y_label:
-            min_y += min_y_label
-
         font = QFont()
         font.setPointSize(self.label_font_size)
         font.setBold(True)
-        painter.setFont(font)
-
         label_text = self.label if self.label is not None else ""
-        painter.drawText(int(min_x), int(min_y), label_text)
+        if not label_text:
+            return
+
+        metrics = QFontMetrics(font)
+        text_width = metrics.horizontalAdvance(label_text)
+        text_height = metrics.height()
+        padding = max(2, int(round(2.0 / self.scale)))
+        baseline = int(min_y) - padding
+        if baseline - text_height - padding < 0:
+            baseline = int(min_y) + text_height + padding
+
+        painter.save()
+        painter.setFont(font)
+        painter.fillRect(
+            int(min_x) - padding,
+            baseline - text_height - padding,
+            text_width + (2 * padding),
+            text_height + (2 * padding),
+            QColor(0, 0, 0, 210),
+        )
+        painter.setPen(QColor(255, 255, 255, 255))
+        painter.drawText(int(min_x), baseline, label_text)
+        painter.restore()
 
     def _get_top_left_corner(self):
         """Get the top-left corner coordinates of the shape."""

@@ -1,5 +1,7 @@
 resources/icons/.DS_Store
 resources.py
+# Preserve compiled Qt assets for installation directly from this fork.
+!/libs/resources.py
 labelImg.egg-info*
 
 *.pyc

@@ -23,7 +23,7 @@ DEFAULT_SHORTCUTS = {
     'create_mode': 'W',
     'edit_mode': 'Ctrl+J',
     'create': 'W',
-    'delete': 'Delete',
+    'delete': '0',
     'copy': 'Ctrl+D',
     'copy_to_clipboard': 'Ctrl+C',
     'paste_from_clipboard': 'Ctrl+V',
@@ -42,7 +42,7 @@ DEFAULT_SHORTCUTS = {
     'light_brighten': 'Ctrl+Shift++',
     'light_darken': 'Ctrl+Shift+-',
     'light_org': 'Ctrl+Shift+=',
-    'edit_label': 'Ctrl+E',
+    'edit_label': 'Alt+C',
     'show_grid': 'Ctrl+Shift+G',
     'create_polygon': 'P',
     'keypoint_mode': 'K',
@@ -102,6 +102,10 @@ class ShortcutConfig:
         for key in DEFAULT_SHORTCUTS:
             value = data.get(key)
             if isinstance(value, str):
+                if key == 'edit_label' and value == 'Ctrl+E':
+                    value = DEFAULT_SHORTCUTS[key]
+                elif key == 'delete' and value == 'Delete':
+                    value = DEFAULT_SHORTCUTS[key]
                 self._shortcuts[key] = value
 
     def export_json(self, file_path):

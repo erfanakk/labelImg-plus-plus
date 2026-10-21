@@ -4,6 +4,9 @@ labelImg++
 
 *A modern, enhanced image annotation tool for machine learning*
 
+This branch preserves the customized ``visual_search`` installation. See
+`INSTALL_CUSTOM.md <INSTALL_CUSTOM.md>`_ for installation on another device.
+
 .. image:: https://img.shields.io/pypi/v/labelImgPlusPlus.svg
         :target: https://pypi.org/project/labelImgPlusPlus/
 

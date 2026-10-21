@@ -1,0 +1,4 @@
+# Base application versions from the working visual_search environment.
+PyQt5==5.15.11
+PyQt5-sip==12.17.0
+lxml==6.1.1

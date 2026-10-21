@@ -19,7 +19,7 @@ try:
         QAction, QActionGroup, QApplication, QCheckBox, QComboBox,
         QDialog, QDockWidget, QFileDialog, QHBoxLayout, QLabel,
         QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-        QProgressDialog, QScrollArea, QTabWidget, QToolButton,
+        QProgressDialog, QScrollArea, QSlider, QTabWidget, QToolButton,
         QVBoxLayout, QWidget, QWidgetAction
     )
 except ImportError:
@@ -35,7 +35,7 @@ except ImportError:
         QAction, QActionGroup, QApplication, QCheckBox, QDockWidget,
         QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
         QMainWindow, QMenu, QMessageBox, QProgressDialog, QScrollArea,
-        QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
+        QSlider, QTabWidget, QToolButton, QVBoxLayout, QWidget, QWidgetAction
     )
     from PyQt4.QtCore import (
         Qt, QByteArray, QFileInfo, QProcess, QSize, QTimer, QPoint, QPointF,
@@ -395,7 +395,50 @@ class MainWindow(QMainWindow, WindowMixin):
         self.combo_box = ComboBox(self)
         list_layout.addWidget(self.combo_box)
 
+        # Live display-size controls; these affect drawing only, never saved
+        # annotation geometry.
+        self.label_font_size = max(
+            3, min(240, int(settings.get('labelFontSize', 48))))
+        self.box_line_width = max(
+            1, min(20, int(settings.get('boxLineWidth', 2))))
+        self.show_bbox_center = bool(settings.get('showBboxCenter', False))
+        Shape.line_width = self.box_line_width
+        Shape.show_center_circle = self.show_bbox_center
+
+        self.label_font_size_dock_caption = QLabel(
+            f'Label font: {self.label_font_size} px')
+        self.label_font_size_dock_slider = QSlider(Qt.Horizontal)
+        self.label_font_size_dock_slider.setRange(3, 240)
+        self.label_font_size_dock_slider.setValue(self.label_font_size)
+        self.label_font_size_dock_slider.valueChanged.connect(
+            self._set_label_font_size)
+        list_layout.addWidget(self.label_font_size_dock_caption)
+        list_layout.addWidget(self.label_font_size_dock_slider)
+
+        self.show_bbox_center_checkbox = QCheckBox(
+            'Show bounding-box center circle')
+        self.show_bbox_center_checkbox.setChecked(self.show_bbox_center)
+        self.show_bbox_center_checkbox.setToolTip(
+            'Draw a center circle on rectangle annotations')
+        self.show_bbox_center_checkbox.toggled.connect(
+            self._set_show_bbox_center)
+        list_layout.addWidget(self.show_bbox_center_checkbox)
+
+        self.box_line_width_caption = QLabel(
+            f'Box line: {self.box_line_width} px')
+        self.box_line_width_slider = QSlider(Qt.Horizontal)
+        self.box_line_width_slider.setRange(1, 20)
+        self.box_line_width_slider.setValue(self.box_line_width)
+        self.box_line_width_slider.valueChanged.connect(
+            self._set_box_line_width)
+        list_layout.addWidget(self.box_line_width_caption)
+        list_layout.addWidget(self.box_line_width_slider)
+
         # Create tabbed label lists for rectangles and polygons
+        self.class_count_label = QLabel('Instances per class: none')
+        self.class_count_label.setWordWrap(True)
+        list_layout.addWidget(self.class_count_label)
+
         self.label_tab_widget = QTabWidget()
         self.rect_label_list = QListWidget()
         self.poly_label_list = QListWidget()
@@ -898,8 +941,34 @@ class MainWindow(QMainWindow, WindowMixin):
         self.display_label_option = QAction(get_str('displayLabel'), self)
         self.display_label_option.setShortcut("Ctrl+Shift+P")
         self.display_label_option.setCheckable(True)
-        self.display_label_option.setChecked(settings.get(SETTING_PAINT_LABEL, False))
+        # Class names are essential for reviewing small keypoint boxes, so
+        # start every session with box labels visible. The menu action still
+        # lets the user hide them temporarily with Ctrl+Shift+P.
+        self.display_label_option.setChecked(True)
         self.display_label_option.triggered.connect(self.toggle_paint_labels_option)
+
+        # Live bounding-box label font-size control. The value is stored in
+        # image-space pixels, so it scales naturally with canvas zoom.
+        self.label_font_size_widget = QWidget()
+        label_font_layout = QHBoxLayout(self.label_font_size_widget)
+        label_font_layout.setContentsMargins(8, 4, 8, 4)
+        self.label_font_size_caption = QLabel(
+            f'Label font: {self.label_font_size} px')
+        self.label_font_size_slider = QSlider(Qt.Horizontal)
+        self.label_font_size_slider.setRange(3, 240)
+        self.label_font_size_slider.setSingleStep(2)
+        self.label_font_size_slider.setPageStep(16)
+        self.label_font_size_slider.setValue(self.label_font_size)
+        self.label_font_size_slider.setMinimumWidth(180)
+        self.label_font_size_slider.setToolTip(
+            'Resize class names drawn above bounding boxes')
+        self.label_font_size_slider.valueChanged.connect(
+            self._set_label_font_size)
+        label_font_layout.addWidget(self.label_font_size_caption)
+        label_font_layout.addWidget(self.label_font_size_slider)
+        self.label_font_size_action = QWidgetAction(self)
+        self.label_font_size_action.setDefaultWidget(
+            self.label_font_size_widget)
 
         # Icon size submenu for toolbar
         self.icon_size_menu = QMenu(get_str('iconSize'), self)
@@ -934,6 +1003,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.auto_save_enabled,
             self.single_class_mode,
             self.display_label_option,
+            self.label_font_size_action,
             self.lock_on_verify_option,
             labels, advanced_mode, gallery_mode, None,
             hide_all, show_all, None,
@@ -1768,7 +1838,12 @@ class MainWindow(QMainWindow, WindowMixin):
         else:
             shape = self.canvas.selected_shape
             if shape:
-                self.shapes_to_items[shape].setSelected(True)
+                item = self.shapes_to_items.get(shape)
+                if item is not None:
+                    item.setSelected(True)
+                else:
+                    self.canvas.de_select_shape()
+                    selected = False
             else:
                 self.rect_label_list.clearSelection()
                 self.poly_label_list.clearSelection()
@@ -1786,6 +1861,10 @@ class MainWindow(QMainWindow, WindowMixin):
         # Show/hide keypoint panel based on selection
         from libs.core.keypoint_config import get_template
         shape = self.canvas.selected_shape
+        if shape is not None:
+            self.statusBar().showMessage(f"Selected class: {shape.label}")
+        elif selected:
+            self.statusBar().showMessage("No annotation selected")
         has_template = (shape is not None
                         and shape.shape_type == ShapeType.RECTANGLE
                         and get_template(shape.label) is not None)
@@ -1915,6 +1994,21 @@ class MainWindow(QMainWindow, WindowMixin):
         poly_count = self.poly_label_list.count()
         self.label_tab_widget.setTabText(0, f'Rectangles ({rect_count})')
         self.label_tab_widget.setTabText(1, f'Polygons ({poly_count})')
+        self._update_class_counts()
+
+    def _update_class_counts(self):
+        """Show the current image's instance count for every class."""
+        counts = {}
+        for label_list in (self.rect_label_list, self.poly_label_list):
+            for row in range(label_list.count()):
+                label = label_list.item(row).text()
+                counts[label] = counts.get(label, 0) + 1
+        summary = ', '.join(
+            f'{label}: {count}'
+            for label, count in sorted(
+                counts.items(), key=lambda item: item[0].lower()))
+        self.class_count_label.setText(
+            f'Instances per class: {summary or "none"}')
 
     def _check_polygon_degradation(self, format_name):
         """Warn the user if polygons will be saved as bounding boxes.
@@ -2107,6 +2201,7 @@ class MainWindow(QMainWindow, WindowMixin):
             self.set_dirty()
         else:  # User probably changed item visibility
             self.canvas.set_shape_visible(shape, item.checkState() == Qt.Checked)
+        self._update_class_counts()
 
     # Callback functions:
     def new_shape(self):
@@ -2310,14 +2405,12 @@ class MainWindow(QMainWindow, WindowMixin):
                     self.status("Error reading %s" % unicode_file_path)
                     return False
 
-                # Downsample if larger than 2048px on either dimension (Issue #31)
-                MAX_DISPLAY_DIM = 2048
-                if original_size.width() > MAX_DISPLAY_DIM or original_size.height() > MAX_DISPLAY_DIM:
-                    scaled_size = original_size.scaled(MAX_DISPLAY_DIM, MAX_DISPLAY_DIM, Qt.KeepAspectRatio)
-                    reader.setScaledSize(scaled_size)
-                    self._image_scale_factor = scaled_size.width() / original_size.width()
-                else:
-                    self._image_scale_factor = 1.0
+                # Annotation review needs the native panorama pixels. The
+                # previous 2048px cap reduced an 8160px panorama to one quarter
+                # of its width, so zooming magnified an already blurry preview.
+                # QImageReader now decodes the full source resolution and the
+                # canvas performs only view-time scaling.
+                self._image_scale_factor = 1.0
 
                 self._original_image_size = original_size
                 image = reader.read()
@@ -2426,7 +2519,7 @@ class MainWindow(QMainWindow, WindowMixin):
         assert not self.image.isNull(), "cannot paint null image"
         self.canvas.scale = 0.01 * self.zoom_widget.value()
         self.canvas.overlay_color = self.light_widget.color()
-        self.canvas.label_font_size = int(0.02 * max(self.image.width(), self.image.height()))
+        self.canvas.label_font_size = self.label_font_size
         self.canvas.adjustSize()
         self.canvas.update()
 
@@ -2477,6 +2570,9 @@ class MainWindow(QMainWindow, WindowMixin):
         settings[SETTING_AUTO_SAVE_INTERVAL] = self._get_current_auto_save_interval()
         settings[SETTING_SINGLE_CLASS] = self.single_class_mode.isChecked()
         settings[SETTING_PAINT_LABEL] = self.display_label_option.isChecked()
+        settings['labelFontSize'] = self.label_font_size
+        settings['boxLineWidth'] = self.box_line_width
+        settings['showBboxCenter'] = self.show_bbox_center
         settings[SETTING_DRAW_SQUARE] = self.draw_squares_option.isChecked()
         settings[SETTING_LOCK_ON_VERIFY] = self.lock_on_verify_option.isChecked()
         settings[SETTING_LABEL_FILE_FORMAT] = self.label_file_format
@@ -2517,12 +2613,14 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
+            self._reload_dataset_classes(dir_path)
             # Clear status cache since annotation directory changed
             self._invalidate_status_cache()
             # Update gallery to reload thumbnails with annotations from new dir
             self.gallery_widget.set_save_dir(self.default_save_dir)
 
-        self.show_bounding_box_from_annotation_file(self.file_path)
+        if self.file_path:
+            self.show_bounding_box_from_annotation_file(self.file_path)
 
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
@@ -2576,6 +2674,7 @@ class MainWindow(QMainWindow, WindowMixin):
         # Only set default_save_dir if not already set (e.g., from command line)
         if self.default_save_dir is None:
             self.default_save_dir = target_dir_path
+        self._reload_dataset_classes(target_dir_path)
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
@@ -2892,10 +2991,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def open_prev_image(self, _value=False):
         # Proceeding prev image without dialog if having any label
-        if self.auto_saving.isChecked():
+        if self.auto_saving.isChecked() and self.dirty:
             if self.default_save_dir is not None:
-                if self.dirty is True:
-                    self.save_file()
+                self.save_file()
             else:
                 self.change_save_dir_dialog()
                 return
@@ -2917,10 +3015,9 @@ class MainWindow(QMainWindow, WindowMixin):
 
     def open_next_image(self, _value=False):
         # Proceeding next image without dialog if having any label
-        if self.auto_saving.isChecked():
+        if self.auto_saving.isChecked() and self.dirty:
             if self.default_save_dir is not None:
-                if self.dirty is True:
-                    self.save_file()
+                self.save_file()
             else:
                 self.change_save_dir_dialog()
                 return
@@ -3018,8 +3115,20 @@ class MainWindow(QMainWindow, WindowMixin):
         delete_path = self.file_path
         if delete_path is not None:
             idx = self.cur_img_idx
+            annotation = probe_annotation(delete_path, self.default_save_dir)
+            if (annotation.path and
+                    os.path.basename(annotation.path).lower() != 'annotations.json'):
+                try:
+                    os.remove(annotation.path)
+                except OSError as error:
+                    self.error_message('Delete Error',
+                                       f'Could not delete annotation file:\n{error}')
+                    return
             if os.path.exists(delete_path):
                 os.remove(delete_path)
+            # The current image and its annotation are gone; directory refresh
+            # must not offer to save that now-missing image.
+            self.set_clean()
             self.import_dir_images(self.last_open_dir)
             if self.img_count > 0:
                 self.cur_img_idx = min(idx, self.img_count - 1)
@@ -3159,6 +3268,63 @@ class MainWindow(QMainWindow, WindowMixin):
                     else:
                         self.label_hist.append(line)
 
+    def _reload_dataset_classes(self, image_dir=None):
+        """Replace demo labels with classes belonging to the opened dataset."""
+        candidates = []
+        search_dirs = [image_dir]
+        if image_dir:
+            parent = os.path.dirname(os.path.abspath(image_dir))
+            search_dirs.extend([
+                parent,
+                os.path.join(parent, 'labels'),
+                os.path.join(parent, 'prelabels'),
+            ])
+        search_dirs.extend([os.getcwd(), os.path.join(
+            os.getcwd(), 'calibration_panorama', 'prelabels')])
+        # A remembered save directory is least trustworthy because it can
+        # belong to the previously opened dataset.
+        search_dirs.append(self.default_save_dir)
+
+        for directory in search_dirs:
+            if not directory:
+                continue
+            for filename in ('classes.txt', 'predefined_classes.txt'):
+                path = os.path.abspath(os.path.join(directory, filename))
+                if path not in candidates:
+                    candidates.append(path)
+
+        class_file = next((path for path in candidates
+                           if os.path.isfile(path)), None)
+        if class_file is None:
+            self.statusBar().showMessage(
+                'No dataset classes.txt or predefined_classes.txt found',
+                5000)
+            return False
+
+        with codecs.open(class_file, 'r', 'utf8') as handle:
+            labels = [line.strip() for line in handle if line.strip()]
+        labels = list(dict.fromkeys(labels))
+        if not labels:
+            self.statusBar().showMessage(
+                f'Class file is empty: {class_file}', 5000)
+            return False
+
+        # Replace, never append: packaged demo labels must not leak into the
+        # active dataset class IDs.
+        self.label_hist[:] = labels
+        self.default_label = labels[0]
+        self.default_label_combo_box.items = self.label_hist
+        self.default_label_combo_box.cb.clear()
+        self.default_label_combo_box.cb.addItems(self.label_hist)
+        self.label_dialog = LabelDialog(
+            parent=self, list_item=self.label_hist)
+        if hasattr(self, '_current_theme'):
+            self.label_dialog.apply_theme(self._current_theme)
+        self.statusBar().showMessage(
+            f'Loaded {len(labels)} dataset classes from {class_file}',
+            7000)
+        return True
+
     def load_pascal_xml_by_filename(self, xml_path):
         if self.file_path is None:
             return
@@ -3281,6 +3447,40 @@ class MainWindow(QMainWindow, WindowMixin):
     def toggle_paint_labels_option(self):
         for shape in self.canvas.shapes:
             shape.paint_label = self.display_label_option.isChecked()
+        self.canvas.update()
+
+    def _set_label_font_size(self, value):
+        """Resize all visible bounding-box labels immediately."""
+        self.label_font_size = int(value)
+        self.label_font_size_caption.setText(
+            f'Label font: {self.label_font_size} px')
+        self.label_font_size_dock_caption.setText(
+            f'Label font: {self.label_font_size} px')
+        for slider in (self.label_font_size_slider,
+                       self.label_font_size_dock_slider):
+            if slider.value() != self.label_font_size:
+                slider.blockSignals(True)
+                slider.setValue(self.label_font_size)
+                slider.blockSignals(False)
+        if self.canvas:
+            self.canvas.label_font_size = self.label_font_size
+            self.canvas.update()
+
+    def _set_box_line_width(self, value):
+        """Resize visible bounding-box outlines immediately."""
+        self.box_line_width = int(value)
+        self.box_line_width_caption.setText(
+            f'Box line: {self.box_line_width} px')
+        Shape.line_width = self.box_line_width
+        if self.canvas:
+            self.canvas.update()
+
+    def _set_show_bbox_center(self, enabled):
+        """Show or hide center circles on rectangle annotations."""
+        self.show_bbox_center = bool(enabled)
+        Shape.show_center_circle = self.show_bbox_center
+        if self.canvas:
+            self.canvas.update()
 
     def toggle_draw_square(self):
         self.canvas.set_drawing_shape_to_square(self.draw_squares_option.isChecked())
